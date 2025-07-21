@@ -15,6 +15,7 @@ model = LlavaForConditionalGeneration.from_pretrained(
     "llava-hf/llava-1.5-7b-hf",
     torch_dtype=torch.float16, 
 ).to("cuda:0")
+print(f"Model is on device: {model.device}")
 processor = AutoProcessor.from_pretrained("llava-hf/llava-1.5-7b-hf")
 print("モデルの準備が完了しました。")
 
