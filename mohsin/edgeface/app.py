@@ -4,6 +4,10 @@ import os
 import time
 import sys
 import json
+import numpy as np
+import speech_recognition as sr
+import threading
+from queue import Queue
 from test import RealTimeFaceRecognition, simple_face_align
 
 # Add project root to Python path for imports
@@ -34,6 +38,80 @@ USER_DATA_DIR = os.path.join(PROJECT_ROOT, 'user_data')
 app.config['clothing_response'] = ""
 app.config['weather_info'] = {}
 app.config['outfit_recommendation'] = {}
+app.config['mirror_active'] = False
+app.config['camera_active'] = False
+
+# Initialize speech recognition
+recognizer = sr.Recognizer()
+voice_command_queue = Queue()
+
+def initialize_camera():
+    """Initialize the camera and face recognizer"""
+    global face_recognizer
+    face_recognizer.cap = cv2.VideoCapture(0)
+    if face_recognizer.cap.isOpened():
+        face_recognizer.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 720)
+        face_recognizer.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1280)
+        app.config['camera_active'] = True
+        print("Camera initialized successfully")
+    else:
+        print("Failed to initialize camera")
+        app.config['camera_active'] = False
+
+def shutdown_camera():
+    """Shutdown the camera"""
+    global face_recognizer
+    if hasattr(face_recognizer, 'cap') and face_recognizer.cap is not None:
+        face_recognizer.cap.release()
+    app.config['camera_active'] = False
+    print("Camera shut down")
+
+def listen_for_wake_word():
+    """Continuously listen for the wake word 'hello mirror'"""
+    while True:
+        with sr.Microphone() as source:
+            try:
+                print("Listening for 'hello'...")
+                recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                audio = recognizer.listen(source, timeout=1, phrase_time_limit=3)
+                
+                try:
+                    text = recognizer.recognize_google(audio).lower()
+                    print(f"Heard: {text}")
+                    
+                    if "hello" in text and not app.config['mirror_active']:
+                        print("Wake word detected! Activating mirror...")
+                        initialize_camera()  # Start the camera
+                        app.config['mirror_active'] = True
+                        # Get weather info immediately upon activation
+                        try:
+                            temp, season, condition, additional_prep = get_weather()
+                            app.config['weather_info'] = {
+                                'temp': temp,
+                                'season': season,
+                                'condition': condition,
+                                'additional_prep': additional_prep
+                            }
+                        except Exception as e:
+                            print(f"Error getting weather: {e}")
+                    
+                    elif "goodbye mirror" in text and app.config['mirror_active']:
+                        print("Deactivating mirror...")
+                        app.config['mirror_active'] = False
+                        app.config['weather_info'] = {}
+                        app.config['outfit_recommendation'] = {}
+                        shutdown_camera()  # Stop the camera
+                        
+                except sr.UnknownValueError:
+                    pass  # Speech was unclear
+                except sr.RequestError as e:
+                    print(f"Could not request results; {e}")
+                    
+            except sr.WaitTimeoutError:
+                pass  # No speech detected
+            except Exception as e:
+                print(f"Error in speech recognition: {e}")
+                time.sleep(1)
 
 def find_profile_folder(person_name):
     profile_path = os.path.join(PROFILES_DIR, person_name)
@@ -43,18 +121,32 @@ def find_profile_folder(person_name):
 
 def gen_frames():
     """Generator function to stream video frames with face recognition and overlaid text"""
+    blank_frame = None
+    
     while True:
         try:
-            # Check if webcam is open, reinitialize if not
-            if not face_recognizer.cap.isOpened():
-                print("Webcam disconnected, attempting to reinitialize...")
-                face_recognizer.cap = cv2.VideoCapture(0)
-                if not face_recognizer.cap.isOpened():
-                    print("Failed to open webcam, retrying in 1 second...")
-                    time.sleep(1)
-                    continue
-                face_recognizer.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 720)
-                face_recognizer.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1280)
+            if not app.config['mirror_active']:
+                # Create a blank frame if not already created
+                if blank_frame is None:
+                    blank_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+                    # Add "Listening..." text to the center
+                    text = "Listening for 'Hello'..."
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    font_scale = 1.5
+                    thickness = 2
+                    text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
+                    text_x = (1280 - text_size[0]) // 2
+                    text_y = 720 // 2
+                    cv2.putText(blank_frame, text, (text_x, text_y), font, font_scale, 
+                              (255, 255, 255), thickness, cv2.LINE_AA)
+                
+                # Use the blank frame when mirror is not active
+                frame = blank_frame.copy()
+                
+            else:
+                # Check if webcam is open when mirror is active
+                if not app.config['camera_active']:
+                    initialize_camera()
 
             # Capture frame
             ret, frame = face_recognizer.cap.read()
@@ -77,24 +169,38 @@ def gen_frames():
                 confidence = face_identities[0][1]
             app.config['last_identity'] = identity
 
-            # Overlay text on the frame
-            # Display recognized identity
-            cv2.putText(frame, f"Recognized: {identity} ({confidence:.2f})", 
-                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+            # Get frame dimensions
+            height, width = frame.shape[:2]
             
-            # Display weather info if available
-            if app.config['weather_info']:
-                weather = app.config['weather_info']
-                cv2.putText(frame, f"Weather: {weather['condition']} {weather['temp']}°C", 
-                            (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
-            
-            # Display outfit recommendation if available
-            if app.config['outfit_recommendation']:
-                outfit = app.config['outfit_recommendation']
-                cv2.putText(frame, f"Recommended: {outfit.get('explanation', '')}", 
-                            (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
-            
-            # Encode frame as JPEG
+            if not app.config['mirror_active']:
+                # Display inactive state message
+                cv2.putText(frame, "Say 'Hello' to activate", 
+                           (width // 4, height // 2), cv2.FONT_HERSHEY_SIMPLEX, 
+                           1.0, (255, 255, 255), 2, cv2.LINE_AA)
+            else:
+                # Display recognized identity
+                cv2.putText(frame, f"Hello, {identity}", 
+                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+                
+                # Display weather info if available
+                if app.config['weather_info']:
+                    weather = app.config['weather_info']
+                    cv2.putText(frame, f"Weather: {weather['condition']} {weather['temp']}°C", 
+                                (width - 300, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+                
+                # Display outfit recommendation if available
+                if app.config['outfit_recommendation']:
+                    outfit = app.config['outfit_recommendation']
+                    outfit_text = outfit.get('explanation', '')
+                    if len(outfit_text) > 50:
+                        outfit_text = outfit_text[:47] + "..."
+                    cv2.putText(frame, f"Recommended: {outfit_text}", 
+                                (10, height - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
+                                
+                # Display deactivation instruction
+                cv2.putText(frame, "Say 'Goodbye Mirror' to deactivate", 
+                           (10, height - 50), cv2.FONT_HERSHEY_SIMPLEX, 
+                           0.5, (200, 200, 200), 1, cv2.LINE_AA)            # Encode frame as JPEG
             ret, buffer = cv2.imencode('.jpg', frame)
             if not ret:
                 print("Failed to encode frame, retrying...")
@@ -224,8 +330,12 @@ def submit_clothing():
 @app.teardown_appcontext
 def cleanup(exception=None):
     """Release webcam when app shuts down"""
-    face_recognizer.cap.release()
+    shutdown_camera()
     cv2.destroyAllWindows()
 
 if __name__ == '__main__':
+    # Start the voice recognition in a separate thread
+    voice_thread = threading.Thread(target=listen_for_wake_word, daemon=True)
+    voice_thread.start()
+    
     app.run(debug=True, host='0.0.0.0', port=5000)
