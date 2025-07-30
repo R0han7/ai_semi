@@ -7,10 +7,10 @@ import time
 import os
 from pathlib import Path
 import glob
-
+from backbones import get_model
 # Try to import from the repository's modules
 try:
-    from backbones import get_model
+    from .backbones import get_model
 except ImportError:
     print("backbones module not found. Make sure you're in the correct directory.")
     
@@ -73,7 +73,8 @@ class RealTimeFaceRecognition:
         
         # Load model
         self.model = get_model(model_name)
-        checkpoint_path = f'checkpoints/{model_name}.pt'
+        
+        checkpoint_path = f'C:/projs/ai_semi/mohsin/edgeface/checkpoints/{model_name}.pt'
         
         # Load pre-trained weights
         self.model.load_state_dict(torch.load(checkpoint_path, map_location='cpu'))
@@ -335,7 +336,7 @@ if __name__ == "__main__":
         # Higher threshold = more strict matching
         face_recognizer = RealTimeFaceRecognition(
             model_name="edgeface_s_gamma_05",
-            images_folder="images",  # Folder containing reference face images
+            images_folder=r"C:\projs\ai_semi\mohsin\edgeface\images",  # Folder containing reference face images
             similarity_threshold=0.6
         )
         

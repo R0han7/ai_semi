@@ -13,39 +13,35 @@ from datetime import datetime
 
 # -------------------- CONFIG --------------------
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
-API_KEY = "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"
+API_KEY = "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"
 WEATHER_API_URL = "https://api.open-meteo.com/v1/forecast"
 LAT, LON = 35.6895, 139.6917
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 IMAGE_DIR = os.path.join(SCRIPT_DIR, "image")
+USER_DATA_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "user_data")
 DEBUG = True  # Toggle debug prints
 
-# -------------------- USER PROFILE --------------------
-personal_info = {
-    "height": "182 cm",
-    "weight": "67 kg",
-    "skin_tone": "warm",
-    "body_type": "skinny",
-    "face_shape": "long",
-    "preferred_color_scheme": "complementary or trending colors"
-}
-
-# -------------------- WARDROBE --------------------
-wardrobe = [
-    {"item_id":"001","type":"shirt","color":"mocha mousse","texture":"cotton","pattern":"solid","season":"summer","base":"shirt_mocha_mousse","formality":"informal"},
-    {"item_id":"002","type":"jeans","color":"black","texture":"denim","pattern":"plain","season":"all","base":"jeans_black","formality":"informal"},
-    {"item_id":"003","type":"shirt","color":"white","texture":"linen","pattern":"solid","season":"summer","base":"shirt_white","formality":"formal"},
-    {"item_id":"004","type":"pants","color":"navy","texture":"cotton","pattern":"plain","season":"all","base":"pants_navy","formality":"formal"},
-    {"item_id":"005","type":"jacket","color":"gray","texture":"wool","pattern":"solid","season":"winter","base":"jacket_gray","formality":"formal"},
-    {"item_id":"006","type":"shoes","color":"brown","texture":"leather","pattern":"plain","season":"all","base":"shoes_brown","formality":"formal"},
-    {"item_id":"007","type":"shoes","color":"black","texture":"suede","pattern":"plain","season":"winter","base":"shoes_black","formality":"formal"},
-    {"item_id":"008","type":"shoes","color":"white","texture":"canvas","pattern":"plain","season":"summer","base":"shoes_white","formality":"informal"},
-    {"item_id":"009","type":"shirt","color":"butter yellow","texture":"silk","pattern":"solid","season":"summer","base":"shirt_butter_yellow","formality":"informal"},
-    {"item_id":"010","type":"pants","color":"chocolate brown","texture":"linen","pattern":"solid","season":"summer","base":"pants_chocolate_brown","formality":"informal"},
-    {"item_id":"011","type":"shirt","color":"wispy pink","texture":"cotton","pattern":"solid","season":"summer","base":"shirt_wispy_pink","formality":"informal"},
-    {"item_id":"012","type":"sweater","color":"forest green","texture":"knit","pattern":"textured","season":"autumn","base":"sweater_forest_green","formality":"semi-formal"},
-    {"item_id":"013","type":"blazer","color":"charcoal","texture":"wool","pattern":"solid","season":"all","base":"blazer_charcoal","formality":["formal","informal"]},
-]
+# -------------------- USER DATA --------------------
+def load_user_data(username):
+    user_dir = os.path.join(USER_DATA_DIR, username)
+    if not os.path.exists(user_dir):
+        raise ValueError(f"User directory not found for {username}")
+    
+    # Load personal info
+    personal_info_path = os.path.join(user_dir, "personal_info.json")
+    if not os.path.exists(personal_info_path):
+        raise ValueError(f"Personal info file not found for {username}")
+    with open(personal_info_path, 'r') as f:
+        personal_info = json.load(f)
+    
+    # Load wardrobe
+    wardrobe_path = os.path.join(user_dir, "wardrobe.json")
+    if not os.path.exists(wardrobe_path):
+        raise ValueError(f"Wardrobe file not found for {username}")
+    with open(wardrobe_path, 'r') as f:
+        wardrobe = json.load(f)
+    
+    return personal_info, wardrobe
 
 # -------------------- WEATHER --------------------
 def get_weather():
@@ -142,7 +138,7 @@ def get_weather():
         return "unknown", "unknown", "unknown", "unknown"
 
 # -------------------- PROMPT BUILD --------------------
-def build_prompt(event, temp, season, condition):
+def build_prompt(event, temp, season, condition, personal_info, wardrobe):
     items = "\n".join([
         f"- {w['item_id']}: {w['color']} {w['texture']} {w['pattern']} {w['type']} (season: {w['season']}, formality: {w['formality']})"
         for w in wardrobe
@@ -201,7 +197,7 @@ def call_groq(prompt):
     return res.json()["choices"][0]["message"]["content"].strip()
 
 # -------------------- DISPLAY OUTFIT --------------------
-def display_outfit(ids):
+def display_outfit(ids, wardrobe):
     id_list = [id_.strip() for id_ in ids.split(",") if id_.strip().isdigit()]
     print("\n🎉 Recommended Outfit:")
     for id_ in id_list:
@@ -216,7 +212,7 @@ def display_outfit(ids):
     return id_list
 
 # -------------------- DISPLAY IMAGES --------------------
-def display_images(outfit_ids):
+def display_images(outfit_ids, wardrobe):
     imgs, titles = [], []
     for id_ in outfit_ids:
         item = next((w for w in wardrobe if w["item_id"] == id_), None)
@@ -249,21 +245,30 @@ def display_images(outfit_ids):
 
 # -------------------- MAIN --------------------
 def main():
+    # Get username
+    username = input("Enter username: ").strip()
+    
+    try:
+        # Load user data
+        personal_info, wardrobe = load_user_data(username)
+    except ValueError as e:
+        print(f"Error: {e}")
+        return
+
     event = input("Enter event (e.g., office party, wedding, casual outing): ").strip()
     temp, season, condition, additional_prep = get_weather()
     print(f"\n🌤 Temp: {temp}°C | Season: {season} | Condition: {condition}\n")
 
-    prompt = build_prompt(event, temp, season, condition)
+    prompt = build_prompt(event, temp, season, condition, personal_info, wardrobe)
     
     response = call_groq(prompt)
    
-
     lines = response.strip().split("\n")
     ids_line = lines[0]
     explanation = " ".join(lines[1:]).strip()
 
-    id_list = display_outfit(ids_line)
-    display_images(id_list)
+    id_list = display_outfit(ids_line, wardrobe)
+    display_images(id_list, wardrobe)
 
     if explanation:
         print(f"\n💡 Why this outfit?\n{explanation}\n")
