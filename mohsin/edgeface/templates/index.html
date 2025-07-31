@@ -3,22 +3,36 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Face Recognition Wardrobe App</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <title>Smart Mirror</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #000;
+            color: #fff;
+            font-family: Arial, sans-serif;
+        }
+        
+        .video-container {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+        }
+        
+        .video-container img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+    </style>
 </head>
 <body>
     <div class="video-container">
         <img src="{{ url_for('video_feed') }}" alt="Video Feed">
-    </div>
-    <div class="info-container">
-        <div id="weatherInfo" class="info-box"></div>
-        <div id="outfitRecommendation" class="info-box"></div>
-    </div>
-    <div class="form-container">
-        <form id="eventForm">
-            <input type="text" id="event" name="event" placeholder="Enter event (e.g., office party, wedding)">
-            <button type="submit">Get Outfit Recommendation</button>
-        </form>
     </div>
 
     <script>
@@ -45,10 +59,10 @@
             }
         }
 
-        // Function to get outfit recommendation
-        document.getElementById('eventForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const formData = new FormData(e.target);
+        // Function to get outfit recommendation (now handled through voice commands)
+        async function getOutfitRecommendation(event) {
+            const formData = new FormData();
+            formData.append('event', event);
             
             try {
                 const response = await fetch('/get_outfit_recommendation', {

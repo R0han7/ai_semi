@@ -81,9 +81,29 @@ def listen_for_wake_word():
                     
                     if "hello" in text and not app.config['mirror_active']:
                         print("Wake word detected! Activating mirror...")
-                        initialize_camera()  # Start the camera
                         app.config['mirror_active'] = True
-                        # Get weather info immediately upon activation
+                        
+                        # Initialize camera for recognition
+                        print("Opening camera for recognition...")
+                        initialize_camera()
+                        
+                        # Wait for 5 seconds while trying to recognize the person
+                        recognition_start = time.time()
+                        while time.time() - recognition_start < 5:
+                            ret, frame = face_recognizer.cap.read()
+                            if ret:
+                                face_identities, _ = face_recognizer.detect_and_recognize_faces(frame)
+                                if face_identities and face_identities[0][0] not in ("Unknown", "Error"):
+                                    identity = face_identities[0][0]
+                                    app.config['last_identity'] = identity
+                                    print(f"Person recognized: {identity}")
+                                    break
+                            time.sleep(0.1)
+                        
+                        # Shutdown camera after recognition
+                        shutdown_camera()
+                        
+                        # Get weather info after recognition
                         try:
                             temp, season, condition, additional_prep = get_weather()
                             app.config['weather_info'] = {
@@ -94,6 +114,42 @@ def listen_for_wake_word():
                             }
                         except Exception as e:
                             print(f"Error getting weather: {e}")
+                    
+                    elif "i want to go to" in text and app.config['mirror_active']:
+                        print("Event request detected!")
+                        event = "office" if "office" in text else "casual"  # Default to casual if not office
+                        # Get outfit recommendation directly
+                        try:
+                            identity = app.config.get('last_identity', 'Unknown')
+                            if identity not in ('Unknown', 'Error'):
+                                # Get outfit recommendation
+                                personal_info, wardrobe = load_user_data(identity.lower())
+                                temp, season, condition, additional_prep = get_weather()
+                                prompt = build_prompt(event, temp, season, condition, personal_info, wardrobe)
+                                response = call_groq(prompt)
+                                
+                                # Parse response and update app config
+                                lines = response.strip().split('\n')
+                                ids_line = lines[0]
+                                explanation = ' '.join(lines[1:]).strip()
+                                
+                                # Get outfit details
+                                outfit_items = []
+                                for item_id in [id_.strip() for id_ in ids_line.split(',') if id_.strip().isdigit()]:
+                                    item = next((w for w in wardrobe if w["item_id"] == item_id), None)
+                                    if item:
+                                        outfit_items.append(item)
+                                
+                                app.config['outfit_recommendation'] = {
+                                    'outfit_items': outfit_items,
+                                    'explanation': explanation,
+                                    'additional_prep': additional_prep
+                                }
+                                print(f"Got outfit recommendation for {event}")
+                            else:
+                                print("No person recognized, cannot get outfit recommendation")
+                        except Exception as e:
+                            print(f"Error getting outfit recommendation: {e}")
                     
                     elif "goodbye mirror" in text and app.config['mirror_active']:
                         print("Deactivating mirror...")
@@ -125,82 +181,83 @@ def gen_frames():
     
     while True:
         try:
+            # Create a blank frame for displaying information
+            frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+            height, width = frame.shape[:2]
+
             if not app.config['mirror_active']:
-                # Create a blank frame if not already created
-                if blank_frame is None:
-                    blank_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
-                    # Add "Listening..." text to the center
-                    text = "Listening for 'Hello'..."
-                    font = cv2.FONT_HERSHEY_SIMPLEX
+                # Display activation instruction
+                text = "Listening for 'Hello'..."
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 1.5
+                thickness = 2
+                text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
+                text_x = (width - text_size[0]) // 2
+                text_y = height // 2
+                cv2.putText(frame, text, (text_x, text_y), font, font_scale, 
+                          (255, 255, 255), thickness, cv2.LINE_AA)
+            else:
+                # Get identity
+                identity = app.config.get('last_identity', 'Unknown')
+                if identity not in ('Unknown', 'Error'):
+                    # Display greeting in the center top
+                    greeting_text = f"Hello, {identity}"
                     font_scale = 1.5
                     thickness = 2
-                    text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
-                    text_x = (1280 - text_size[0]) // 2
-                    text_y = 720 // 2
-                    cv2.putText(blank_frame, text, (text_x, text_y), font, font_scale, 
-                              (255, 255, 255), thickness, cv2.LINE_AA)
+                    text_size = cv2.getTextSize(greeting_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
+                    text_x = (width - text_size[0]) // 2
+                    cv2.putText(frame, greeting_text, 
+                              (text_x, 100), cv2.FONT_HERSHEY_SIMPLEX, 
+                              font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
                 
-                # Use the blank frame when mirror is not active
-                frame = blank_frame.copy()
-                
-            else:
-                # Check if webcam is open when mirror is active
-                if not app.config['camera_active']:
-                    initialize_camera()
-
-            # Capture frame
-            ret, frame = face_recognizer.cap.read()
-            if not ret:
-                print("Failed to capture frame, retrying...")
-                time.sleep(0.1)
-                continue
-
-            # Flip frame for mirror effect
-            frame = cv2.flip(frame, 1)
+                # Display weather info if available (centered below greeting)
+                if app.config['weather_info']:
+                    weather = app.config['weather_info']
+                    weather_text = f"{weather.get('temp', 'N/A')}°C - {weather.get('condition', 'N/A')}"
+                    font_scale = 1.2
+                    thickness = 2
+                    text_size = cv2.getTextSize(weather_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
+                    text_x = (width - text_size[0]) // 2
+                    cv2.putText(frame, weather_text, 
+                              (text_x, 180), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
             
-            # Detect and recognize faces
-            face_identities, face_locations = face_recognizer.detect_and_recognize_faces(frame)
-            
-            # Get the latest identity
-            identity = "Unknown"
-            confidence = 0.0
-            if face_identities and face_identities[0][0] not in ("Unknown", "Error"):
-                identity = face_identities[0][0]
-                confidence = face_identities[0][1]
-            app.config['last_identity'] = identity
-
             # Get frame dimensions
             height, width = frame.shape[:2]
             
-            if not app.config['mirror_active']:
-                # Display inactive state message
-                cv2.putText(frame, "Say 'Hello' to activate", 
-                           (width // 4, height // 2), cv2.FONT_HERSHEY_SIMPLEX, 
-                           1.0, (255, 255, 255), 2, cv2.LINE_AA)
-            else:
-                # Display recognized identity
-                cv2.putText(frame, f"Hello, {identity}", 
-                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
-                
-                # Display weather info if available
-                if app.config['weather_info']:
-                    weather = app.config['weather_info']
-                    cv2.putText(frame, f"Weather: {weather['condition']} {weather['temp']}°C", 
-                                (width - 300, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
-                
+            if app.config['mirror_active']:
                 # Display outfit recommendation if available
                 if app.config['outfit_recommendation']:
                     outfit = app.config['outfit_recommendation']
-                    outfit_text = outfit.get('explanation', '')
-                    if len(outfit_text) > 50:
-                        outfit_text = outfit_text[:47] + "..."
-                    cv2.putText(frame, f"Recommended: {outfit_text}", 
-                                (10, height - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
-                                
-                # Display deactivation instruction
-                cv2.putText(frame, "Say 'Goodbye Mirror' to deactivate", 
-                           (10, height - 50), cv2.FONT_HERSHEY_SIMPLEX, 
-                           0.5, (200, 200, 200), 1, cv2.LINE_AA)            # Encode frame as JPEG
+                    if outfit.get('outfit_items'):
+                        # Display the recommendation centered on screen
+                        y_position = height // 2 + 50  # Start below the weather info
+                        
+                        # Display each item on a new line
+                        for item in outfit['outfit_items']:
+                            item_text = f"{item['type']}: {item['color']} {item.get('texture', '')} {item.get('pattern', '')}".strip()
+                            text_size = cv2.getTextSize(item_text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
+                            text_x = (width - text_size[0]) // 2
+                            cv2.putText(frame, item_text, 
+                                      (text_x, y_position), cv2.FONT_HERSHEY_SIMPLEX, 
+                                      0.8, (0, 255, 0), 2, cv2.LINE_AA)
+                            y_position += 40
+                # Display voice command instructions at bottom
+                if app.config['mirror_active']:
+                    instructions1 = "Say 'I want to go to office' for outfit recommendation"
+                    instructions2 = "Say 'Goodbye Mirror' to deactivate"
+                    
+                    text_size1 = cv2.getTextSize(instructions1, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+                    text_size2 = cv2.getTextSize(instructions2, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+                    
+                    text_x1 = (width - text_size1[0]) // 2
+                    text_x2 = (width - text_size2[0]) // 2
+                    
+                    cv2.putText(frame, instructions1, 
+                              (text_x1, height - 70), cv2.FONT_HERSHEY_SIMPLEX, 
+                              0.5, (200, 200, 200), 1, cv2.LINE_AA)
+                    cv2.putText(frame, instructions2, 
+                              (text_x2, height - 40), cv2.FONT_HERSHEY_SIMPLEX, 
+                              0.5, (200, 200, 200), 1, cv2.LINE_AA)            # Encode frame as JPEG
             ret, buffer = cv2.imencode('.jpg', frame)
             if not ret:
                 print("Failed to encode frame, retrying...")
