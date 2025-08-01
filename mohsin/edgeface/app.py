@@ -32,32 +32,24 @@ LON = 130.4017  # Kitakyushu longitude
 WEATHER_API_URL = "https://api.open-meteo.com/v1/forecast"
 AQI_API = "https://air-quality-api.open-meteo.com/v1/air-quality"
 
-# RealSense pipeline and configuration
+# Global variables for camera
 pipeline = None
 config = None
 align = None
+camera_lock = threading.Lock()
 
-# Initialize face recognizer
-face_recognizer = RealTimeFaceRecognition(
-    model_name="edgeface_s_gamma_05",
-    images_folder=os.path.join(current_dir, 'images'),
-    similarity_threshold=0.6
-)
-
-# Profile folder path
-PROFILES_DIR = os.path.join(PROJECT_ROOT, 'mohsin', 'profiles')
-USER_DATA_DIR = os.path.join(PROJECT_ROOT, 'user_data')
-
-# Store the latest clothing response and weather info
-app.config['clothing_response'] = ""
+# Store the latest information
 app.config['weather_info'] = {}
 app.config['outfit_recommendation'] = {}
 app.config['mirror_active'] = False
 app.config['camera_active'] = False
+app.config['last_identity'] = 'Unknown'
+app.config['recognition_start_time'] = None
+app.config['unknown_start_time'] = None
+app.config['system_running'] = True
 
-# Initialize speech recognition
+# Initialize speech recognition for voice commands only
 recognizer = sr.Recognizer()
-voice_command_queue = Queue()
 
 def get_weather_json():
     """Enhanced weather API function with detailed hourly data"""
@@ -123,16 +115,6 @@ def get_weather_json():
         
         # Get additional preparation suggestions
         additional_prep = get_additional_weather_prep(weather_code, temperature, bool(is_day), precipitation, uv_index, windspeed)
-
-        # Display weather info
-        print("\n🌤️ Current Weather Conditions (Most Recent Hour):")
-        print(f"Time: {latest_time}")
-        print(f"Temperature: {temperature} °C")
-        print(f"Humidity: {humidity} %")
-        print(f"UV Index: {uv_index}")
-        print(f"Windspeed: {windspeed} km/h")
-        print(f"Precipitation: {precipitation} mm")
-        print(f"Air Quality Index (AQI): {aqi}")
 
         return {
             'time': latest_time,
@@ -249,51 +231,57 @@ def initialize_realsense_camera():
     """Initialize the Intel RealSense camera"""
     global pipeline, config, align
     
-    try:
-        # Create a pipeline
-        pipeline = rs.pipeline()
-        
-        # Create a config and configure the pipeline to stream
-        config = rs.config()
-        
-        # Get device product line for setting a supporting resolution
-        pipeline_wrapper = rs.pipeline_wrapper(pipeline)
-        pipeline_profile = config.resolve(pipeline_wrapper)
-        device = pipeline_profile.get_device()
-        device_product_line = str(device.get_info(rs.camera_info.product_line))
-        
-        found_rgb = False
-        for s in device.sensors:
-            if s.get_info(rs.camera_info.name) == 'RGB Camera':
-                found_rgb = True
-                break
-        if not found_rgb:
-            print("The demo requires Depth camera with Color sensor")
+    with camera_lock:
+        try:
+            if pipeline is not None:
+                print("Camera already initialized")
+                return True
+                
+            # Create a pipeline
+            pipeline = rs.pipeline()
+            
+            # Create a config and configure the pipeline to stream
+            config = rs.config()
+            
+            # Get device product line for setting a supporting resolution
+            pipeline_wrapper = rs.pipeline_wrapper(pipeline)
+            pipeline_profile = config.resolve(pipeline_wrapper)
+            device = pipeline_profile.get_device()
+            device_product_line = str(device.get_info(rs.camera_info.product_line))
+            
+            found_rgb = False
+            for s in device.sensors:
+                if s.get_info(rs.camera_info.name) == 'RGB Camera':
+                    found_rgb = True
+                    break
+            if not found_rgb:
+                print("The demo requires Depth camera with Color sensor")
+                return False
+            
+            # Configure streams
+            config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+            
+            if device_product_line == 'L500':
+                config.enable_stream(rs.stream.color, 960, 540, rs.format.bgr8, 30)
+            else:
+                config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+            
+            # Start streaming
+            pipeline.start(config)
+            
+            # Create an align object for aligning depth to color
+            align_to = rs.stream.color
+            align = rs.align(align_to)
+            
+            app.config['camera_active'] = True
+            print("RealSense camera initialized successfully")
+            return True
+            
+        except Exception as e:
+            print(f"Failed to initialize RealSense camera: {e}")
+            app.config['camera_active'] = False
+            pipeline = None
             return False
-        
-        # Configure streams
-        config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-        
-        if device_product_line == 'L500':
-            config.enable_stream(rs.stream.color, 960, 540, rs.format.bgr8, 30)
-        else:
-            config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-        
-        # Start streaming
-        pipeline.start(config)
-        
-        # Create an align object for aligning depth to color
-        align_to = rs.stream.color
-        align = rs.align(align_to)
-        
-        app.config['camera_active'] = True
-        print("RealSense camera initialized successfully")
-        return True
-        
-    except Exception as e:
-        print(f"Failed to initialize RealSense camera: {e}")
-        app.config['camera_active'] = False
-        return False
 
 def get_realsense_frame():
     """Get a frame from the RealSense camera"""
@@ -303,8 +291,8 @@ def get_realsense_frame():
         return None, None
     
     try:
-        # Wait for a coherent pair of frames: depth and color
-        frames = pipeline.wait_for_frames()
+        # Wait for a coherent pair of frames: depth and color (with timeout)
+        frames = pipeline.wait_for_frames(timeout_ms=1000)  # 1 second timeout
         
         # Align the depth frame to color frame
         aligned_frames = align.process(frames)
@@ -323,21 +311,23 @@ def get_realsense_frame():
         return color_image, depth_image
         
     except Exception as e:
-        print(f"Error getting RealSense frame: {e}")
+        if "timeout" not in str(e).lower():
+            print(f"Error getting RealSense frame: {e}")
         return None, None
 
 def shutdown_realsense_camera():
     """Shutdown the RealSense camera"""
     global pipeline
     
-    try:
-        if pipeline is not None:
-            pipeline.stop()
-            pipeline = None
-        app.config['camera_active'] = False
-        print("RealSense camera shut down")
-    except Exception as e:
-        print(f"Error shutting down RealSense camera: {e}")
+    with camera_lock:
+        try:
+            if pipeline is not None:
+                pipeline.stop()
+                pipeline = None
+            app.config['camera_active'] = False
+            print("RealSense camera shut down")
+        except Exception as e:
+            print(f"Error shutting down RealSense camera: {e}")
 
 # Modified RealTimeFaceRecognition class to work with RealSense
 class RealSenseFaceRecognition(RealTimeFaceRecognition):
@@ -359,120 +349,157 @@ class RealSenseFaceRecognition(RealTimeFaceRecognition):
         # Use the existing face detection logic but with RealSense frame
         return self.detect_and_recognize_faces(color_frame)
 
-# Update face recognizer to use RealSense version
+# Initialize face recognizer
 face_recognizer = RealSenseFaceRecognition(
     model_name="edgeface_s_gamma_05",
     images_folder=os.path.join(current_dir, 'images'),
     similarity_threshold=0.6
 )
 
-def listen_for_wake_word():
-    """Continuously listen for the wake word 'hello mirror'"""
-    while True:
-        with sr.Microphone() as source:
-            try:
-                print("Listening for 'hello'...")
-                recognizer.adjust_for_ambient_noise(source, duration=0.5)
-                audio = recognizer.listen(source, timeout=1, phrase_time_limit=3)
-                
+def listen_for_voice_commands():
+    """Listen for voice commands after person is recognized"""
+    print("Voice command listener started")
+    while app.config['system_running']:
+        if app.config['mirror_active']:  # Only listen when mirror is active (person recognized)
+            with sr.Microphone() as source:
                 try:
-                    text = recognizer.recognize_google(audio).lower()
-                    print(f"Heard: {text}")
+                    recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                    audio = recognizer.listen(source, timeout=1, phrase_time_limit=5)
                     
-                    if "hello" in text and not app.config['mirror_active']:
-                        print("Wake word detected! Activating mirror...")
-                        app.config['mirror_active'] = True
+                    try:
+                        text = recognizer.recognize_google(audio).lower()
+                        print(f"Voice command heard: {text}")
                         
-                        # Initialize RealSense camera for recognition
-                        print("Opening RealSense camera for recognition...")
-                        if initialize_realsense_camera():
+                        if "i want to go to" in text:
+                            print("Event request detected!")
+                            event = "office" if "office" in text else "casual"  # Default to casual if not office
                             
-                            # Wait for 5 seconds while trying to recognize the person
-                            recognition_start = time.time()
-                            while time.time() - recognition_start < 5:
-                                color_frame, depth_frame = get_realsense_frame()
-                                if color_frame is not None:
-                                    face_identities, _ = face_recognizer.detect_and_recognize_faces_realsense(
-                                        color_frame, depth_frame
-                                    )
-                                    if face_identities and face_identities[0][0] not in ("Unknown", "Error"):
-                                        identity = face_identities[0][0]
-                                        app.config['last_identity'] = identity
-                                        print(f"Person recognized: {identity}")
-                                        break
-                                time.sleep(0.1)
+                            # Get outfit recommendation
+                            try:
+                                identity = app.config.get('last_identity', 'Unknown')
+                                if identity not in ('Unknown', 'Error'):
+                                    # Get outfit recommendation
+                                    personal_info, wardrobe = load_user_data(identity.lower())
+                                    weather_info = get_weather_json()
+                                    prompt = build_prompt(event, weather_info['temp'], weather_info['season'], weather_info['condition'], personal_info, wardrobe)
+                                    response = call_groq(prompt)
+                                    
+                                    # Parse response and update app config
+                                    lines = response.strip().split('\n')
+                                    ids_line = lines[0]
+                                    explanation = ' '.join(lines[1:]).strip()
+                                    
+                                    # Get outfit details
+                                    outfit_items = []
+                                    for item_id in [id_.strip() for id_ in ids_line.split(',') if id_.strip().isdigit()]:
+                                        item = next((w for w in wardrobe if w["item_id"] == item_id), None)
+                                        if item:
+                                            outfit_items.append(item)
+                                    
+                                    app.config['outfit_recommendation'] = {
+                                        'outfit_items': outfit_items,
+                                        'explanation': explanation,
+                                        'additional_prep': weather_info['additional_prep'],
+                                        'weather_info': weather_info
+                                    }
+                                    print(f"Got outfit recommendation for {event}")
+                                else:
+                                    print("No person recognized, cannot get outfit recommendation")
+                            except Exception as e:
+                                print(f"Error getting outfit recommendation: {e}")
+                        
+                    except sr.UnknownValueError:
+                        pass  # Speech was unclear
+                    except sr.RequestError as e:
+                        print(f"Could not request results; {e}")
+                        
+                except sr.WaitTimeoutError:
+                    pass  # No speech detected
+                except Exception as e:
+                    print(f"Error in speech recognition: {e}")
+                    time.sleep(1)
+        else:
+            time.sleep(1)  # Sleep when mirror is not active
+
+def continuous_face_recognition():
+    """Continuously run face recognition"""
+    UNKNOWN_TIMEOUT = 10  # seconds to wait before going to sleep when Unknown
+    RECOGNITION_STABLE_TIME = 2  # seconds to wait for stable recognition
+    
+    print("Starting continuous face recognition thread...")
+    
+    while app.config['system_running']:
+        try:
+            if app.config['camera_active'] and pipeline is not None:
+                color_frame, depth_frame = get_realsense_frame()
+                if color_frame is not None:
+                    face_identities, _ = face_recognizer.detect_and_recognize_faces_realsense(
+                        color_frame, depth_frame
+                    )
+                    
+                    current_time = time.time()
+                    
+                    if face_identities and face_identities[0][0] not in ("Unknown", "Error"):
+                        # Person recognized
+                        identity = face_identities[0][0]
+                        
+                        # Check if this is a new recognition or continuation
+                        if app.config['last_identity'] != identity:
+                            print(f"New person detected: {identity}")
+                            app.config['last_identity'] = identity
+                            app.config['recognition_start_time'] = current_time
+                            app.config['unknown_start_time'] = None
+                        
+                        # Check if recognition has been stable for required time
+                        if (app.config['recognition_start_time'] and 
+                            current_time - app.config['recognition_start_time'] >= RECOGNITION_STABLE_TIME):
                             
-                            # Shutdown camera after recognition
-                            shutdown_realsense_camera()
-                        else:
-                            print("Failed to initialize RealSense camera")
+                            if not app.config['mirror_active']:
+                                print(f"Activating mirror for {identity}")
+                                app.config['mirror_active'] = True
+                                
+                                # Get weather info after recognition
+                                try:
+                                    weather_info = get_weather_json()
+                                    app.config['weather_info'] = weather_info
+                                    print("Weather info loaded")
+                                except Exception as e:
+                                    print(f"Error getting weather: {e}")
+                    
+                    else:
+                        # Unknown person or no face detected
+                        if app.config['last_identity'] != 'Unknown':
+                            print("Unknown person detected or no face found")
+                            app.config['last_identity'] = 'Unknown'
+                            app.config['unknown_start_time'] = current_time
+                            app.config['recognition_start_time'] = None
                         
-                        # Get weather info after recognition using enhanced API
-                        try:
-                            weather_info = get_weather_json()
-                            app.config['weather_info'] = weather_info
-                        except Exception as e:
-                            print(f"Error getting weather: {e}")
-                    
-                    elif "i want to go to" in text and app.config['mirror_active']:
-                        print("Event request detected!")
-                        event = "office" if "office" in text else "casual"  # Default to casual if not office
-                        # Get outfit recommendation directly
-                        try:
-                            identity = app.config.get('last_identity', 'Unknown')
-                            if identity not in ('Unknown', 'Error'):
-                                # Get outfit recommendation
-                                personal_info, wardrobe = load_user_data(identity.lower())
-                                weather_info = get_weather_json()
-                                prompt = build_prompt(event, weather_info['temp'], weather_info['season'], weather_info['condition'], personal_info, wardrobe)
-                                response = call_groq(prompt)
-                                
-                                # Parse response and update app config
-                                lines = response.strip().split('\n')
-                                ids_line = lines[0]
-                                explanation = ' '.join(lines[1:]).strip()
-                                
-                                # Get outfit details
-                                outfit_items = []
-                                for item_id in [id_.strip() for id_ in ids_line.split(',') if id_.strip().isdigit()]:
-                                    item = next((w for w in wardrobe if w["item_id"] == item_id), None)
-                                    if item:
-                                        outfit_items.append(item)
-                                
-                                app.config['outfit_recommendation'] = {
-                                    'outfit_items': outfit_items,
-                                    'explanation': explanation,
-                                    'additional_prep': weather_info['additional_prep'],
-                                    'weather_info': weather_info
-                                }
-                                print(f"Got outfit recommendation for {event}")
-                            else:
-                                print("No person recognized, cannot get outfit recommendation")
-                        except Exception as e:
-                            print(f"Error getting outfit recommendation: {e}")
-                    
-                    elif "goodbye mirror" in text and app.config['mirror_active']:
-                        print("Deactivating mirror...")
-                        app.config['mirror_active'] = False
-                        app.config['weather_info'] = {}
-                        app.config['outfit_recommendation'] = {}
-                        shutdown_realsense_camera()  # Stop the RealSense camera
-                        
-                except sr.UnknownValueError:
-                    pass  # Speech was unclear
-                except sr.RequestError as e:
-                    print(f"Could not request results; {e}")
-                    
-            except sr.WaitTimeoutError:
-                pass  # No speech detected
-            except Exception as e:
-                print(f"Error in speech recognition: {e}")
-                time.sleep(1)
+                        # Check if unknown state has persisted long enough
+                        if (app.config['unknown_start_time'] and 
+                            current_time - app.config['unknown_start_time'] >= UNKNOWN_TIMEOUT):
+                            
+                            if app.config['mirror_active']:
+                                print("Going to sleep - no recognized person for too long")
+                                app.config['mirror_active'] = False
+                                app.config['weather_info'] = {}
+                                app.config['outfit_recommendation'] = {}
+                else:
+                    # No frame available, wait a bit longer
+                    time.sleep(1)
+                    continue
+            else:
+                # Camera not active, wait
+                time.sleep(2)
+                continue
+                
+            time.sleep(0.5)  # Check every 0.5 seconds
+                
+        except Exception as e:
+            print(f"Error in continuous face recognition: {e}")
+            time.sleep(2)
 
 def gen_frames():
     """Generator function to stream video frames with face recognition and overlaid text"""
-    blank_frame = None
-    
     while True:
         try:
             # Create a blank frame for displaying information
@@ -480,8 +507,8 @@ def gen_frames():
             height, width = frame.shape[:2]
 
             if not app.config['mirror_active']:
-                # Display activation instruction
-                text = "Listening for 'Hello'..."
+                # Display waiting message
+                text = "Waiting for person recognition..."
                 font = cv2.FONT_HERSHEY_SIMPLEX
                 font_scale = 1.5
                 thickness = 2
@@ -490,6 +517,14 @@ def gen_frames():
                 text_y = height // 2
                 cv2.putText(frame, text, (text_x, text_y), font, font_scale, 
                           (255, 255, 255), thickness, cv2.LINE_AA)
+                
+                # Show current recognition status
+                identity = app.config.get('last_identity', 'Unknown')
+                status_text = f"Current: {identity}"
+                text_size = cv2.getTextSize(status_text, font, 0.8, 1)[0]
+                text_x = (width - text_size[0]) // 2
+                cv2.putText(frame, status_text, (text_x, text_y + 60), font, 0.8, 
+                          (200, 200, 200), 1, cv2.LINE_AA)
             else:
                 # Get identity
                 identity = app.config.get('last_identity', 'Unknown')
@@ -507,7 +542,6 @@ def gen_frames():
                 # Display enhanced weather info if available
                 if app.config['weather_info']:
                     weather = app.config['weather_info']
-                    print(f"Displaying weather info: {weather}")
                     
                     y_pos = 180
                     font_scale = 0.8
@@ -515,7 +549,7 @@ def gen_frames():
                     # Temperature and condition
                     if weather.get('temp') != 'N/A':
                         temp_text = f"Temperature: {weather['temp']}C - {weather.get('condition', 'N/A')}"
-                        temp_text=temp_text.replace("?", " ")
+                        temp_text = temp_text.replace("?", " ")
                         text_size = cv2.getTextSize(temp_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 2)[0]
                         text_x = (width - text_size[0]) // 2
                         cv2.putText(frame, temp_text, (text_x, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 
@@ -566,71 +600,60 @@ def gen_frames():
                         cv2.putText(frame, aqi_text, (text_x, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 
                                   font_scale, (200, 200, 200), 1, cv2.LINE_AA)
             
-            # Get frame dimensions
-            height, width = frame.shape[:2]
-            
-            if app.config['mirror_active']:
-                # Display outfit recommendation if available
-                if app.config['outfit_recommendation']:
-                    outfit = app.config['outfit_recommendation']
-                    if outfit.get('outfit_items'):
-                        # Display the recommendation centered on screen
-                        y_position = height // 2 + 100  # Start below the weather info
+            # Display outfit recommendation if available
+            if app.config['mirror_active'] and app.config['outfit_recommendation']:
+                outfit = app.config['outfit_recommendation']
+                if outfit.get('outfit_items'):
+                    # Display the recommendation centered on screen
+                    y_position = height // 2 + 100  # Start below the weather info
+                    
+                    # Display each item on a new line
+                    for item in outfit['outfit_items']:
+                        item_text = f"{item['type']}: {item['color']} {item.get('texture', '')} {item.get('pattern', '')}".strip()
+                        text_size = cv2.getTextSize(item_text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
+                        text_x = (width - text_size[0]) // 2
+                        cv2.putText(frame, item_text, 
+                                  (text_x, y_position), cv2.FONT_HERSHEY_SIMPLEX, 
+                                  0.8, (0, 255, 0), 2, cv2.LINE_AA)
+                        y_position += 40
                         
-                        # Display each item on a new line
-                        for item in outfit['outfit_items']:
-                            item_text = f"{item['type']}: {item['color']} {item.get('texture', '')} {item.get('pattern', '')}".strip()
-                            text_size = cv2.getTextSize(item_text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
-                            text_x = (width - text_size[0]) // 2
-                            cv2.putText(frame, item_text, 
+                    # Display additional weather preparation if available
+                    if outfit.get('additional_prep') and outfit['additional_prep'] != "No special preparation needed":
+                        y_position += 20  # Add some space
+                        prep_text = f"Weather tip: {outfit['additional_prep']}"
+                        # Split long text into multiple lines if needed
+                        max_width = width - 100
+                        words = prep_text.split()
+                        line = ""
+                        for word in words:
+                            test_line = line + word + " "
+                            text_size = cv2.getTextSize(test_line, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)[0]
+                            if text_size[0] <= max_width:
+                                line = test_line
+                            else:
+                                if line:
+                                    text_x = (width - cv2.getTextSize(line.strip(), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)[0][0]) // 2
+                                    cv2.putText(frame, line.strip(), 
+                                              (text_x, y_position), cv2.FONT_HERSHEY_SIMPLEX, 
+                                              0.6, (255, 255, 0), 1, cv2.LINE_AA)
+                                    y_position += 30
+                                line = word + " "
+                        if line:
+                            text_x = (width - cv2.getTextSize(line.strip(), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)[0][0]) // 2
+                            cv2.putText(frame, line.strip(), 
                                       (text_x, y_position), cv2.FONT_HERSHEY_SIMPLEX, 
-                                      0.8, (0, 255, 0), 2, cv2.LINE_AA)
-                            y_position += 40
-                            
-                        # Display additional weather preparation if available
-                        if outfit.get('additional_prep') and outfit['additional_prep'] != "No special preparation needed":
-                            y_position += 20  # Add some space
-                            prep_text = f"Weather tip: {outfit['additional_prep']}"
-                            # Split long text into multiple lines if needed
-                            max_width = width - 100
-                            words = prep_text.split()
-                            line = ""
-                            for word in words:
-                                test_line = line + word + " "
-                                text_size = cv2.getTextSize(test_line, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)[0]
-                                if text_size[0] <= max_width:
-                                    line = test_line
-                                else:
-                                    if line:
-                                        text_x = (width - cv2.getTextSize(line.strip(), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)[0][0]) // 2
-                                        cv2.putText(frame, line.strip(), 
-                                                  (text_x, y_position), cv2.FONT_HERSHEY_SIMPLEX, 
-                                                  0.6, (255, 255, 0), 1, cv2.LINE_AA)
-                                        y_position += 30
-                                    line = word + " "
-                            if line:
-                                text_x = (width - cv2.getTextSize(line.strip(), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)[0][0]) // 2
-                                cv2.putText(frame, line.strip(), 
-                                          (text_x, y_position), cv2.FONT_HERSHEY_SIMPLEX, 
-                                          0.6, (255, 255, 0), 1, cv2.LINE_AA)
+                                      0.6, (255, 255, 0), 1, cv2.LINE_AA)
+            
+            # Display voice command instructions at bottom when active
+            if app.config['mirror_active']:
+                instructions1 = "Say 'I want to go to office' for outfit recommendation"
                 
-                # Display voice command instructions at bottom
-                if app.config['mirror_active']:
-                    instructions1 = "Say 'I want to go to office' for outfit recommendation"
-                    instructions2 = "Say 'Goodbye Mirror' to deactivate"
-                    
-                    text_size1 = cv2.getTextSize(instructions1, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
-                    text_size2 = cv2.getTextSize(instructions2, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
-                    
-                    text_x1 = (width - text_size1[0]) // 2
-                    text_x2 = (width - text_size2[0]) // 2
-                    
-                    cv2.putText(frame, instructions1, 
-                              (text_x1, height - 70), cv2.FONT_HERSHEY_SIMPLEX, 
-                              0.5, (200, 200, 200), 1, cv2.LINE_AA)
-                    cv2.putText(frame, instructions2, 
-                              (text_x2, height - 40), cv2.FONT_HERSHEY_SIMPLEX, 
-                              0.5, (200, 200, 200), 1, cv2.LINE_AA)
+                text_size1 = cv2.getTextSize(instructions1, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+                text_x1 = (width - text_size1[0]) // 2
+                
+                cv2.putText(frame, instructions1, 
+                          (text_x1, height - 40), cv2.FONT_HERSHEY_SIMPLEX, 
+                          0.5, (200, 200, 200), 1, cv2.LINE_AA)
             
             # Encode frame as JPEG
             ret, buffer = cv2.imencode('.jpg', frame)
@@ -651,31 +674,12 @@ def gen_frames():
             continue
 
 def find_profile_folder(person_name):
-    profile_path = os.path.join(PROFILES_DIR, person_name)
+    profile_path = os.path.join(PROJECT_ROOT, 'mohsin', 'profiles', person_name)
     if os.path.exists(profile_path) and os.path.isdir(profile_path):
         return profile_path
     return None
 
-# Optional: Add route to get depth information
-@app.route('/depth_info')
-def get_depth_info():
-    """Get depth information from the current frame"""
-    if not app.config['camera_active']:
-        return jsonify({'error': 'Camera not active'})
-    
-    color_frame, depth_frame = get_realsense_frame()
-    if depth_frame is not None:
-        # Get depth statistics
-        depth_stats = {
-            'min_depth': float(np.min(depth_frame)),
-            'max_depth': float(np.max(depth_frame)),
-            'mean_depth': float(np.mean(depth_frame)),
-            'center_depth': float(depth_frame[depth_frame.shape[0]//2, depth_frame.shape[1]//2])
-        }
-        return jsonify(depth_stats)
-    else:
-        return jsonify({'error': 'No depth data available'})
-
+# Routes
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -769,32 +773,52 @@ def get_outfit_recommendation():
             'error': f'Failed to get outfit recommendation: {str(e)}'
         }), 500
 
-@app.route('/submit_clothing', methods=['POST'])
-def submit_clothing():
-    clothing = request.form.get('clothing')
-    identity = app.config.get('last_identity', 'Unknown')
-    
-    if identity and identity != "Unknown" and identity != "Error":
-        profile_folder = find_profile_folder(identity)
-        if profile_folder:
-            response = f"{identity} wants to wear: {clothing}"
-        else:
-            response = f"No profile folder found for {identity}"
-    else:
-        response = "No person recognized"
-    
-    # Store the response to display on the video
-    app.config['clothing_response'] = response
-    return jsonify({'response': response})
+@app.route('/system_status')
+def system_status():
+    """Get current system status"""
+    return jsonify({
+        'camera_active': app.config['camera_active'],
+        'mirror_active': app.config['mirror_active'],
+        'last_identity': app.config['last_identity'],
+        'has_weather': bool(app.config.get('weather_info')),
+        'has_outfit': bool(app.config.get('outfit_recommendation'))
+    })
 
-@app.teardown_appcontext
-def cleanup(exception=None):
-    """Release webcam when app shuts down"""
+def cleanup():
+    """Cleanup function"""
+    print("Cleaning up...")
+    app.config['system_running'] = False
+    shutdown_realsense_camera()
     cv2.destroyAllWindows()
 
 if __name__ == '__main__':
-    # Start the voice recognition in a separate thread
-    voice_thread = threading.Thread(target=listen_for_wake_word, daemon=True)
-    voice_thread.start()
+    # Initialize RealSense camera at startup
+    print("Smart Mirror System Starting...")
+    print("Initializing RealSense camera...")
     
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    if initialize_realsense_camera():
+        print("RealSense camera initialized successfully")
+        
+        print("Starting background threads...")
+        
+        # Start the continuous face recognition in a separate thread
+        recognition_thread = threading.Thread(target=continuous_face_recognition, daemon=True)
+        recognition_thread.start()
+        
+        # Start the voice command recognition in a separate thread
+        voice_thread = threading.Thread(target=listen_for_voice_commands, daemon=True)
+        voice_thread.start()
+        
+        print("Smart mirror system started")
+        print("Access the mirror at: http://localhost:5000")
+        
+        try:
+            # Run without debug mode to avoid reinitialization
+            app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+        except KeyboardInterrupt:
+            print("\nShutting down...")
+        finally:
+            cleanup()
+    else:
+        print("Failed to initialize RealSense camera. Exiting...")
+        sys.exit(1)
