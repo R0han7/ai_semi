@@ -15,7 +15,7 @@ from datetime import datetime
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 API_KEY = "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"
 WEATHER_API_URL = "https://api.open-meteo.com/v1/forecast"
-LAT, LON = 35.6895, 139.6917
+LAT, LON = 33.8888387802569, 130.71054525598575
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 IMAGE_DIR = os.path.join(SCRIPT_DIR, "image")
 USER_DATA_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "user_data")
