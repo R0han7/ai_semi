@@ -42,6 +42,36 @@ LAT = 33.6844  # Kitakyushu latitude
 LON = 130.4017  # Kitakyushu longitude
 WEATHER_API_URL = "https://api.open-meteo.com/v1/forecast"
 AQI_API = "https://air-quality-api.open-meteo.com/v1/air-quality"
+GEOCODING_API = "https://api.opencagedata.com/geocode/v1/json"
+GEOCODING_API_KEY = "342267174f6e439cbd402dd28bf3a5ef"  # Replace with your API key
+
+def get_location_name():
+    """Get location name from coordinates using reverse geocoding"""
+    try:
+        params = {
+            'q': f"{LAT},{LON}",
+            'key': GEOCODING_API_KEY,
+            'language': 'en'
+        }
+        response = requests.get(GEOCODING_API, params=params, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        
+        if data['results']:
+            components = data['results'][0]['components']
+            city = components.get('city') or components.get('town')
+            state = components.get('state')
+            country = components.get('country')
+            
+            if city and country:
+                return f"{city}, {country}"
+            elif state and country:
+                return f"{state}, {country}"
+            else:
+                return country or "Unknown location"
+    except Exception as e:
+        print(f"Error in reverse geocoding: {e}")
+        return "Unknown location"
 
 # Global variables for camera
 pipeline = None
@@ -188,6 +218,28 @@ def determine_season_from_temp(temperature):
         return "mild"
     else:
         return "summer"
+
+def generate_weather_description(weather_info):
+    """Generate natural weather description using Groq API"""
+    try:
+        location = get_location_name()
+        prompt = f"""Generate a natural, conversational description of the current weather in {location}.
+        Weather details:
+        - Temperature: {weather_info['temp']}°C
+        - Condition: {weather_info['condition']}
+        - Humidity: {weather_info['humidity']}%
+        - UV Index: {weather_info['uv_index']}
+        - Wind Speed: {weather_info['windspeed']} km/h
+        - Precipitation: {weather_info['precipitation']} mm
+        - Air Quality Index: {weather_info['aqi']}
+        
+        Create a friendly, natural-sounding description that someone might say in conversation."""
+        
+        response = call_groq(prompt)
+        return response.strip()
+    except Exception as e:
+        print(f"Error generating weather description: {e}")
+        return None
 
 def get_additional_weather_prep(weather_code, temperature, is_day, precipitation=0, uv_index=0, windspeed=0):
     """Enhanced preparation suggestions based on detailed weather conditions"""
@@ -484,11 +536,16 @@ def continuous_face_recognition():
                                 welcome_message = f"Welcome, {identity}"
                                 threading.Thread(target=speak, args=(welcome_message,), daemon=True).start()
                                 
-                                # Get weather info after recognition
+                                # Get weather info and speak it after recognition
                                 try:
                                     weather_info = get_weather_json()
                                     app.config['weather_info'] = weather_info
                                     print("Weather info loaded")
+                                    
+                                    # Generate and speak weather description
+                                    weather_description = generate_weather_description(weather_info)
+                                    if weather_description:
+                                        threading.Thread(target=speak, args=(weather_description,), daemon=True).start()
                                 except Exception as e:
                                     print(f"Error getting weather: {e}")
                     
