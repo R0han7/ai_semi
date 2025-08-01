@@ -1,0 +1,15 @@
+[
+    {"item_id":"001","type":"shirt","color":"mocha mousse","texture":"cotton","pattern":"solid","season":"summer","base":"shirt_mocha_mousse","formality":"informal"},
+    {"item_id":"002","type":"jeans","color":"black","texture":"denim","pattern":"plain","season":"all","base":"jeans_black","formality":"informal"},
+    {"item_id":"003","type":"shirt","color":"white","texture":"linen","pattern":"solid","season":"summer","base":"shirt_white","formality":"formal"},
+    {"item_id":"004","type":"pants","color":"navy","texture":"cotton","pattern":"plain","season":"all","base":"pants_navy","formality":"formal"},
+    {"item_id":"005","type":"jacket","color":"gray","texture":"wool","pattern":"solid","season":"winter","base":"jacket_gray","formality":"formal"},
+    {"item_id":"006","type":"shoes","color":"brown","texture":"leather","pattern":"plain","season":"all","base":"shoes_brown","formality":"formal"},
+    {"item_id":"007","type":"shoes","color":"black","texture":"suede","pattern":"plain","season":"winter","base":"shoes_black","formality":"formal"},
+    {"item_id":"008","type":"shoes","color":"white","texture":"canvas","pattern":"plain","season":"summer","base":"shoes_white","formality":"informal"},
+    {"item_id":"009","type":"shirt","color":"butter yellow","texture":"silk","pattern":"solid","season":"summer","base":"shirt_butter_yellow","formality":"informal"},
+    {"item_id":"010","type":"pants","color":"chocolate brown","texture":"linen","pattern":"solid","season":"summer","base":"pants_chocolate_brown","formality":"informal"},
+    {"item_id":"011","type":"shirt","color":"wispy pink","texture":"cotton","pattern":"solid","season":"summer","base":"shirt_wispy_pink","formality":"informal"},
+    {"item_id":"012","type":"sweater","color":"forest green","texture":"knit","pattern":"textured","season":"autumn","base":"sweater_forest_green","formality":"semi-formal"},
+    {"item_id":"013","type":"blazer","color":"charcoal","texture":"wool","pattern":"solid","season":"all","base":"blazer_charcoal","formality":["formal","informal"]}
+]

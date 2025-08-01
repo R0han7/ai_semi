@@ -11,11 +11,22 @@ from queue import Queue
 import pyrealsense2 as rs
 import requests
 from datetime import datetime
+import pyttsx3
 from test import RealTimeFaceRecognition, simple_face_align
 
 # Add project root to Python path for imports
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append(PROJECT_ROOT)
+
+def speak(text):
+    """Function to convert text to speech using a new engine instance each time"""
+    try:
+        engine = pyttsx3.init()
+        engine.say(text)
+        engine.runAndWait()
+        engine.stop()
+    except Exception as e:
+        print(f"Error in text-to-speech: {e}")
 
 # Import functions from new_test
 from aryan.new_test import build_prompt, call_groq, load_user_data
@@ -396,12 +407,23 @@ def listen_for_voice_commands():
                                         if item:
                                             outfit_items.append(item)
                                     
-                                    app.config['outfit_recommendation'] = {
+                                    recommendation = {
                                         'outfit_items': outfit_items,
                                         'explanation': explanation,
                                         'additional_prep': weather_info['additional_prep'],
                                         'weather_info': weather_info
                                     }
+                                    app.config['outfit_recommendation'] = recommendation
+                                    
+                                    # Prepare speech for outfit recommendation
+                                    outfit_speech = f"For {event}, I recommend: "
+                                    for item in outfit_items:
+                                        outfit_speech += f"{item['color']} {item['type']}, "
+                                    outfit_speech += f". {weather_info['additional_prep']}"
+                                    
+                                    # Speak the recommendation in a separate thread
+                                    threading.Thread(target=speak, args=(outfit_speech,), daemon=True).start()
+                                    
                                     print(f"Got outfit recommendation for {event}")
                                 else:
                                     print("No person recognized, cannot get outfit recommendation")
@@ -457,6 +479,10 @@ def continuous_face_recognition():
                             if not app.config['mirror_active']:
                                 print(f"Activating mirror for {identity}")
                                 app.config['mirror_active'] = True
+                                
+                                # Speak welcome message
+                                welcome_message = f"Welcome, {identity}"
+                                threading.Thread(target=speak, args=(welcome_message,), daemon=True).start()
                                 
                                 # Get weather info after recognition
                                 try:
