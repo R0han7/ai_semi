@@ -30,10 +30,69 @@ def speak(text):
 
 # Import functions from new_test
 from aryan.new_test import build_prompt, call_groq, load_user_data
+from langchain.memory import ConversationBufferMemory
+from langchain.chains import LLMChain
+from langchain.prompts import PromptTemplate
+from langchain_groq import ChatGroq
+from langchain.schema import SystemMessage
+import json
 
 # Import the backbones module from the current directory
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(current_dir)
+
+# Initialize LangChain components
+outfit_memory = {}  # Store memories per user
+GROQ_API_KEY = "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" # Make sure to set this in your environment
+
+def initialize_user_memory(user_id):
+    """Initialize or get user's outfit memory"""
+    if user_id not in outfit_memory:
+        outfit_memory[user_id] = ConversationBufferMemory(
+            memory_key="chat_history",
+            return_messages=True
+        )
+    return outfit_memory[user_id]
+
+def create_outfit_chain(user_id):
+    """Create a LangChain chain for outfit recommendations"""
+    memory = initialize_user_memory(user_id)
+    
+    template = """You are a smart fashion assistant. Consider the following context:
+    Previous recommendations: {chat_history}
+    Weather: {weather}
+    Event: {event}
+    Personal Info: {personal_info}
+    Available Wardrobe: {wardrobe}
+    
+    Generate an outfit recommendation that:
+    1. Is suitable for the weather and event
+    2. Avoids repeating recently recommended combinations
+    3. Considers the user's style preferences
+    4. Works well together as an ensemble
+    
+    Output the recommendation as a JSON string with:
+    1. item_ids: list of selected item IDs
+    2. explanation: why this combination works
+    3. weather_considerations: how it suits the current weather
+    """
+    
+    prompt = PromptTemplate(
+        input_variables=["chat_history", "weather", "event", "personal_info", "wardrobe"],
+        template=template
+    )
+    
+    llm = ChatGroq(
+        groq_api_key=GROQ_API_KEY,
+        model_name="mixtral-8x7b-32768"
+    )
+    
+    return LLMChain(
+        llm=llm,
+        prompt=prompt,
+        memory=memory,
+        verbose=True
+    )
 
 app = Flask(__name__)
 
@@ -816,16 +875,19 @@ def get_outfit_recommendation():
         # Get enhanced weather info
         weather_info = get_weather_json()
         
-        # Build and send prompt to get outfit recommendation using enhanced weather data
-        prompt = build_prompt(
-            event, 
-            weather_info['temp'], 
-            weather_info['season'], 
-            weather_info['condition'], 
-            personal_info, 
-            wardrobe
-        )
-        response = call_groq(prompt)
+        # Create or get the user's LangChain system
+        chain = create_outfit_chain(identity.lower())
+        
+        # Prepare the input for the chain
+        chain_input = {
+            "weather": json.dumps(weather_info),
+            "event": event,
+            "personal_info": json.dumps(personal_info),
+            "wardrobe": json.dumps(wardrobe)
+        }
+        
+        # Get recommendation from the chain
+        response = chain.run(chain_input)
         
         # Parse response
         lines = response.strip().split('\n')
