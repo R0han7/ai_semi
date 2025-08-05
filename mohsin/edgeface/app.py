@@ -301,7 +301,6 @@ def generate_weather_description(weather_info):
         return None
 
 def get_additional_weather_prep(weather_code, temperature, is_day, precipitation=0, uv_index=0, windspeed=0):
-    """Enhanced preparation suggestions based on detailed weather conditions"""
     prep_suggestions = []
     
     # Temperature-based suggestions
@@ -492,7 +491,20 @@ def listen_for_voice_commands():
                         text = recognizer.recognize_google(audio).lower()
                         print(f"Voice command heard: {text}")
                         
-                        if "i want to go to" in text:
+                        if "goodbye" in text:
+                            print("Goodbye command detected - shutting down system")
+                            # Speak goodbye message
+                            goodbye_message = f"Goodbye, {app.config.get('last_identity', '')}. Have a great day!"
+                            threading.Thread(target=speak, args=(goodbye_message,), daemon=True).start()
+                            # Wait for the message to be spoken
+                            time.sleep(3)
+                            # Trigger system shutdown
+                            app.config['system_running'] = False
+                            cleanup()
+                            # Exit the application
+                            os._exit(0)
+                            
+                        elif "i want to go to" in text:
                             print("Event request detected!")
                             event = "office" if "office" in text else "casual"  # Default to casual if not office
                             
@@ -649,8 +661,8 @@ def gen_frames():
             height, width = frame.shape[:2]
 
             if not app.config['mirror_active']:
-                # Display waiting message
-                text = "Waiting for person recognition..."
+                # Display sleeping message
+                text = "sleeping..."
                 font = cv2.FONT_HERSHEY_SIMPLEX
                 font_scale = 1.5
                 thickness = 2
@@ -662,7 +674,7 @@ def gen_frames():
                 
                 # Show current recognition status
                 identity = app.config.get('last_identity', 'Unknown')
-                status_text = f"Current: {identity}"
+                status_text = f"{identity}"
                 text_size = cv2.getTextSize(status_text, font, 0.8, 1)[0]
                 text_x = (width - text_size[0]) // 2
                 cv2.putText(frame, status_text, (text_x, text_y + 60), font, 0.8, 
@@ -688,24 +700,38 @@ def gen_frames():
                     y_pos = 180
                     font_scale = 0.8
                     
-                    # Temperature and condition
+                    # Temperature and condition with enhanced visuals
                     if weather.get('temp') != 'N/A':
                         temp_text = f"Temperature: {weather['temp']}C - {weather.get('condition', 'N/A')}"
                         temp_text = temp_text.replace("?", " ")
-                        text_size = cv2.getTextSize(temp_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 2)[0]
+                        font = cv2.FONT_HERSHEY_DUPLEX
+                        font_scale = 1.2  # Larger font for temperature
+                        thickness = 2
+                        text_size = cv2.getTextSize(temp_text, font, font_scale, thickness)[0]
                         text_x = (width - text_size[0]) // 2
-                        cv2.putText(frame, temp_text, (text_x, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 
-                                  font_scale, (255, 255, 255), 2, cv2.LINE_AA)
-                        y_pos += 35
+                        
+                        # Add shadow effect for better visibility
+                        cv2.putText(frame, temp_text, (text_x, y_pos), font, font_scale, 
+                                  (50, 50, 50), thickness + 2, cv2.LINE_AA)  # Shadow
+                        # Temperature in cool blue
+                        cv2.putText(frame, temp_text, (text_x, y_pos), font, font_scale, 
+                                  (255, 223, 0), thickness, cv2.LINE_AA)  # Cyan-ish
+                        y_pos += 45  # Increased spacing
                     
-                    # Humidity
+                    # Humidity with enhanced visuals
                     if weather.get('humidity') != 'N/A':
                         humidity_text = f"Humidity: {weather['humidity']}%"
-                        text_size = cv2.getTextSize(humidity_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1)[0]
+                        font_scale = 1.0  # Slightly smaller than temperature
+                        text_size = cv2.getTextSize(humidity_text, font, font_scale, thickness)[0]
                         text_x = (width - text_size[0]) // 2
-                        cv2.putText(frame, humidity_text, (text_x, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 
-                                  font_scale, (200, 200, 200), 1, cv2.LINE_AA)
-                        y_pos += 30
+                        
+                        # Add subtle shadow
+                        cv2.putText(frame, humidity_text, (text_x, y_pos), font, font_scale, 
+                                  (50, 50, 50), thickness + 1, cv2.LINE_AA)  # Shadow
+                        # Humidity in light blue
+                        cv2.putText(frame, humidity_text, (text_x, y_pos), font, font_scale, 
+                                  (255, 180, 0), thickness, cv2.LINE_AA)  # Light blue
+                        y_pos += 40  # Increased spacing
                     
                     # UV Index
                     if weather.get('uv_index') != 'N/A':
@@ -788,13 +814,20 @@ def gen_frames():
             
             # Display voice command instructions at bottom when active
             if app.config['mirror_active']:
+                # Outfit recommendation instruction
                 instructions1 = "Say 'I want to go to office' for outfit recommendation"
-                
                 text_size1 = cv2.getTextSize(instructions1, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
                 text_x1 = (width - text_size1[0]) // 2
-                
                 cv2.putText(frame, instructions1, 
-                          (text_x1, height - 40), cv2.FONT_HERSHEY_SIMPLEX, 
+                          (text_x1, height - 60), cv2.FONT_HERSHEY_SIMPLEX, 
+                          0.5, (200, 200, 200), 1, cv2.LINE_AA)
+                
+                # Goodbye instruction
+                instructions2 = "Say 'goodbye' to turn off the system"
+                text_size2 = cv2.getTextSize(instructions2, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+                text_x2 = (width - text_size2[0]) // 2
+                cv2.putText(frame, instructions2, 
+                          (text_x2, height - 30), cv2.FONT_HERSHEY_SIMPLEX, 
                           0.5, (200, 200, 200), 1, cv2.LINE_AA)
             
             # Encode frame as JPEG

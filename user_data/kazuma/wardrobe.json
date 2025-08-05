@@ -1,0 +1,102 @@
+[
+    {
+        "item_id": "101",
+        "type": "shirt",
+        "color": "mist blue",
+        "texture": "linen",
+        "pattern": "solid",
+        "season": "summer",
+        "base": "shirt_mist_blue",
+        "formality": "informal"
+    },
+    {
+        "item_id": "102",
+        "type": "pants",
+        "color": "stone grey",
+        "texture": "cotton",
+        "pattern": "plain",
+        "season": "all",
+        "base": "pants_stone_grey",
+        "formality": "informal"
+    },
+    {
+        "item_id": "103",
+        "type": "shirt",
+        "color": "ecru",
+        "texture": "cotton",
+        "pattern": "solid",
+        "season": "spring",
+        "base": "shirt_ecru",
+        "formality": "informal"
+    },
+    {
+        "item_id": "104",
+        "type": "sweater",
+        "color": "matcha green",
+        "texture": "knit",
+        "pattern": "solid",
+        "season": "autumn",
+        "base": "sweater_matcha_green",
+        "formality": "semi-formal"
+    },
+    {
+        "item_id": "105",
+        "type": "blazer",
+        "color": "charcoal",
+        "texture": "wool blend",
+        "pattern": "solid",
+        "season": "all",
+        "base": "blazer_charcoal",
+        "formality": ["formal", "informal"]
+    },
+    {
+        "item_id": "106",
+        "type": "shirt",
+        "color": "sakura pink",
+        "texture": "cotton",
+        "pattern": "solid",
+        "season": "spring",
+        "base": "shirt_sakura_pink",
+        "formality": "informal"
+    },
+    {
+        "item_id": "107",
+        "type": "shoes",
+        "color": "white",
+        "texture": "canvas",
+        "pattern": "plain",
+        "season": "summer",
+        "base": "shoes_white_canvas",
+        "formality": "informal"
+    },
+    {
+        "item_id": "108",
+        "type": "shoes",
+        "color": "black",
+        "texture": "leather",
+        "pattern": "plain",
+        "season": "all",
+        "base": "shoes_black_leather",
+        "formality": "formal"
+    },
+    {
+        "item_id": "109",
+        "type": "pants",
+        "color": "koi orange",
+        "texture": "linen",
+        "pattern": "solid",
+        "season": "summer",
+        "base": "pants_koi_orange",
+        "formality": "informal"
+    },
+    {
+        "item_id": "110",
+        "type": "jacket",
+        "color": "ash grey",
+        "texture": "cotton twill",
+        "pattern": "solid",
+        "season": "spring",
+        "base": "jacket_ash_grey",
+        "formality": "semi-formal"
+    }
+]

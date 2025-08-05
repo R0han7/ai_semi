@@ -13,7 +13,7 @@ from datetime import datetime
 
 # -------------------- CONFIG --------------------
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
-API_KEY = "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"
+API_KEY = "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"
 WEATHER_API_URL = "https://api.open-meteo.com/v1/forecast"
 LAT, LON = 33.8888387802569, 130.71054525598575
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
